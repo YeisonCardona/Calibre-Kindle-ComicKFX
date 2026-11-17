@@ -31,7 +31,7 @@ cp -r ../kckfxgen/ ./lib/kckfxgen
 
 # 5. Generate plugin ZIP
 echo "Generating generate_comic_kfx.zip..."
-zip -r ../generate_comic_kfx.zip lib/ images/ __init__.py ui.py plugin-import-name-generate_comic_kfx.txt
+zip -r ../generate_comic_kfx.zip lib/ images/ __init__.py ui.py dialog_ui.py plugin-import-name-generate_comic_kfx.txt
 
 # 6. Install plugin
 /Applications/calibre.app/Contents/MacOS/calibre-customize -a ../generate_comic_kfx.zip
