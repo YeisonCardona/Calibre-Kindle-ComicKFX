@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from calibre.gui2.actions import InterfaceAction
 from calibre.gui2 import info_dialog, error_dialog
@@ -18,58 +19,60 @@ from qt.core import (
     QGroupBox,
     QThread,
     pyqtSignal,
+    QSpinBox,
+    QHBoxLayout,
 )
+
+
+from .dialog_ui import Ui_Dialog
 
 
 class GenerateComicKFXDialog(QDialog):
 
-    def __init__(self, text, parent=None):
+    DEVICE_WIDTHS = {
+        "radioButton_scribe3": 1980,
+        "radioButton_scribe_colorsoft": 1980,
+        "radioButton_scribe_1": 1860,
+        "radioButton_paperwhite12": 1264,
+        "radioButton_colorsoft": 1264,
+        "radioButton_paperwhite11": 1236,
+        "radioButton_kindle11": 1072,
+        "radioButton_aluminium": 1072,
+    }
+
+    def __init__(self, files, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("Generate Comic KFX")
+        self.ui = Ui_Dialog()
+        self.ui.setupUi(self)
+        self.set_files(files)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(text))
+    def set_files(self, files):
+        self.ui.listWidget.clear()
+        self.ui.listWidget.addItems(files)
 
-        # Read direction
-        direction_box = QGroupBox("Read direction:")
-        direction_layout = QVBoxLayout(direction_box)
+    def max_width(self):
+        if not self.ui.groupBox_resize.isChecked():
+            return None
 
-        self.direction_group = QButtonGroup(self)
-        self.rtl = QRadioButton("RTL (Right to Left, Asian comics)")
-        self.rtl.setChecked(True)
-        self.ltr = QRadioButton("LTR (Left to Right, Western comics)")
+        if self.ui.radioButton_custom.isChecked():
+            return self.ui.spinBox_custom.value()
 
-        self.direction_group.addButton(self.rtl)
-        self.direction_group.addButton(self.ltr)
+        for name, width in self.DEVICE_WIDTHS.items():
+            if getattr(self.ui, name).isChecked():
+                return width
 
-        direction_layout.addWidget(self.rtl)
-        direction_layout.addWidget(self.ltr)
-        layout.addWidget(direction_box)
+        return None
 
-        # Content type
-        content_box = QGroupBox("Content type:")
-        content_layout = QVBoxLayout(content_box)
+    def reading_order(self) -> Literal["RTL", "LTR"]:
+        if self.ui.radioButton_rtl.isChecked():
+            return "RTL"
+        return "LTR"
 
-        self.content_group = QButtonGroup(self)
-        self.pdoc = QRadioButton("PDOC (Displayed in Kindle Documents)")
-        self.ebook = QRadioButton("EBOOK (Displayed in Kindle Books)")
-        self.ebook.setChecked(True)
-
-        self.content_group.addButton(self.ebook)
-        self.content_group.addButton(self.pdoc)
-
-        content_layout.addWidget(self.ebook)
-        content_layout.addWidget(self.pdoc)
-        layout.addWidget(content_box)
-
-        # Dialog buttons
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+    def content_type(self) -> Literal["PDOC", "EBOOK"]:
+        if self.ui.radioButton_pdoc.isChecked():
+            return "PDOC"
+        return "EBOOK"
 
 
 class ComicKfxWorker(QThread):
@@ -106,6 +109,7 @@ class ComicKfxWorker(QThread):
                         page_progression=self.options["page_progression"],
                         split_page_order=self.options["split_page_order"],
                         page_spread_previews=True,
+                        max_width=self.options["max_width"],
                         cde_content_type=self.options["content_type"],
                         layout_view="virtual",
                         book_title=mi.title,
@@ -207,20 +211,19 @@ class GenerateComicKFX(InterfaceAction):
 
         cbz_filenames = [Path(path).name for _, path in cbz_items]
         dialog = GenerateComicKFXDialog(
-            f"The following titles will be converted into optimized KFX comic files:\n\n{'\n'.join(cbz_filenames)}\n\n",
-            self.gui,
+            files=cbz_filenames,
+            parent=self.gui,
         )
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            reading_order = "RTL" if dialog.rtl.isChecked() else "LTR"
-            content_type = "PDOC" if dialog.pdoc.isChecked() else "EBOOK"
 
             options = {
-                "page_progression": "rtl" if reading_order == "RTL" else "ltr",
+                "page_progression": "rtl" if dialog.reading_order() == "RTL" else "ltr",
                 "split_page_order": (
-                    "right-left" if reading_order == "RTL" else "left-right"
+                    "right-left" if dialog.reading_order() == "RTL" else "left-right"
                 ),
-                "content_type": content_type,
+                "content_type": dialog.content_type(),
+                "max_width": dialog.max_width(),
             }
 
             runtime_lib_path = self._get_lib_path()

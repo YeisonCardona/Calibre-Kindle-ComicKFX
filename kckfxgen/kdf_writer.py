@@ -99,6 +99,7 @@ def _jpeg_reencode_kwargs_from_source(im: Image.Image) -> dict:
         kwargs["progressive"] = True
     return kwargs
 
+
 # sqlite_master.sql 须与 kfxlib 的 kpf_container.py 中单行 DDL 完全一致（Calibre KFX Output 用 set 成员比对）
 _KDF_SCHEMA_SQL = (
     "CREATE TABLE capabilities(key char(20), version smallint, primary key (key, version)) without rowid;\n"
@@ -185,16 +186,48 @@ def _sniff_jpeg_png_format(raw: bytes, suffix: str) -> str | None:
     return None
 
 
-def _read_raster_passthrough(path: Path) -> tuple[bytes, str, int, int]:
-    """读取栅格原文件字节（不重编码），并解析宽高（仅解码元数据/必要扫描）。"""
+# def _read_raster_passthrough(path: Path) -> tuple[bytes, str, int, int]:
+#     """读取栅格原文件字节（不重编码），并解析宽高（仅解码元数据/必要扫描）。"""
+#     raw = path.read_bytes()
+#     fmt = _sniff_jpeg_png_format(raw, path.suffix)
+#     if fmt is None:
+#         raise ValueError(f"内页仅支持原样嵌入 JPEG/PNG，且须与文件内容一致: {path}")
+#     with Image.open(io.BytesIO(raw)) as im:
+#         w, h = im.size
+#     return raw, fmt, w, h
+
+
+def _read_raster_passthrough(
+    path: Path,
+    max_width: int | None = None,
+) -> tuple[bytes, str, int, int]:
+    """Lee JPEG/PNG y reduce su ancho máximo conservando la proporción."""
     raw = path.read_bytes()
     fmt = _sniff_jpeg_png_format(raw, path.suffix)
+
     if fmt is None:
-        raise ValueError(
-            f"内页仅支持原样嵌入 JPEG/PNG，且须与文件内容一致: {path}"
-        )
+        raise ValueError(f"内页仅支持 JPEG/PNG: {path}")
+
     with Image.open(io.BytesIO(raw)) as im:
+        im.load()
         w, h = im.size
+
+        if max_width and w > max_width:
+            new_height = round(h * max_width / w)
+            im = im.resize((max_width, new_height), Image.Resampling.LANCZOS)
+
+            output = io.BytesIO()
+
+            if fmt.lower() in ("jpg", "jpeg"):
+                if im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                im.save(output, format="JPEG", quality=90, optimize=True)
+            else:
+                im.save(output, format="PNG", optimize=True)
+
+            raw = output.getvalue()
+            w, h = im.size
+
     return raw, fmt, w, h
 
 
@@ -272,8 +305,12 @@ def _load_page_raster_for_kdf(
     rotate_landscape_90: bool,
     erase_colorsoft_rainbow: bool,
     rainbow_use_gpu: bool = False,
+    max_width: int | None = None,
 ) -> tuple[bytes, str, int, int]:
-    image_bytes, ion_fmt, im_width, im_height = _read_raster_passthrough(image_path)
+    image_bytes, ion_fmt, im_width, im_height = _read_raster_passthrough(
+        image_path,
+        max_width=max_width,
+    )
     if ion_fmt == "png":
         logger.debug("[kdf] 内嵌 KFX：PNG→JPEG %s", image_path.name)
         image_bytes = _png_bytes_to_jpeg_for_kdf(image_bytes)
@@ -341,14 +378,19 @@ class ImageKdfWriter:
         page_progression: Literal["ltr", "rtl"] = "ltr",
         layout_view: Literal["fixed", "virtual"] = "fixed",
         virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
+        max_width: int | None = None,
     ) -> None:
         self.res_dir = db_path.parent / "res"
-        cover_idx = cover_index if cover_index is not None else (
-            _first_portrait_cover_index(
-                image_paths, rotate_landscape_90=rotate_landscape_90
+        cover_idx = (
+            cover_index
+            if cover_index is not None
+            else (
+                _first_portrait_cover_index(
+                    image_paths, rotate_landscape_90=rotate_landscape_90
+                )
+                if cover_from_first_portrait
+                else 0
             )
-            if cover_from_first_portrait
-            else 0
         )
         logger.debug(
             "[kdf] 初始化 KDF: db=%s res_dir=%s 图片数=%d cover_idx=%d portrait=%s "
@@ -369,7 +411,9 @@ class ImageKdfWriter:
         )
         spread_pair_starts = set(spread_pair_starts or ())
         if any(i < 0 or i + 1 >= len(image_paths) for i in spread_pair_starts):
-            raise ValueError("Índice de par de páginas fuera del rango de imágenes KDF.")
+            raise ValueError(
+                "Índice de par de páginas fuera del rango de imágenes KDF."
+            )
         self.res_dir.mkdir(exist_ok=True)
         db_path = db_path.resolve()
         parent = db_path.parent
@@ -426,7 +470,9 @@ class ImageKdfWriter:
                 progress_stride = 1 if total_pages <= 120 else max(1, total_pages // 20)
                 if erase_colorsoft_rainbow:
                     if rainbow_use_gpu:
-                        logger.info("[kdf] 彩虹纹流程 GPU 模式: %s", gpu_runtime_status())
+                        logger.info(
+                            "[kdf] 彩虹纹流程 GPU 模式: %s", gpu_runtime_status()
+                        )
                     else:
                         logger.info("[kdf] 彩虹纹流程 GPU 模式: off（按参数使用 CPU）")
 
@@ -434,7 +480,11 @@ class ImageKdfWriter:
                 while idx < len(image_paths):
                     img_path = image_paths[idx]
                     page_no = idx + 1
-                    if page_no == 1 or page_no == total_pages or (page_no % progress_stride == 0):
+                    if (
+                        page_no == 1
+                        or page_no == total_pages
+                        or (page_no % progress_stride == 0)
+                    ):
                         logger.info(
                             "[kdf] 单书进度 %d/%d (%.1f%%) - %s",
                             page_no,
@@ -465,6 +515,7 @@ class ImageKdfWriter:
                                         else None
                                     ),
                                     rainbow_use_gpu=rainbow_use_gpu,
+                                    max_width=max_width,
                                 )
                             )
                             authoring_aux_ids.extend(aux_ids)
@@ -481,6 +532,7 @@ class ImageKdfWriter:
                                         else None
                                     ),
                                     rainbow_use_gpu=rainbow_use_gpu,
+                                    max_width=max_width,
                                 )
                             )
                         section_ids.append(section_id)
@@ -505,6 +557,7 @@ class ImageKdfWriter:
                                 virtual_panel_axis=virtual_panel_axis,
                                 preloaded_raster=pr,
                                 rainbow_use_gpu=rainbow_use_gpu,
+                                max_width=max_width,
                             )
                         )
                         authoring_aux_ids.append(aux_id)
@@ -515,6 +568,7 @@ class ImageKdfWriter:
                             erase_colorsoft_rainbow=erase_colorsoft_rainbow,
                             preloaded_raster=pr,
                             rainbow_use_gpu=rainbow_use_gpu,
+                            max_width=max_width,
                         )
                     section_ids.append(section_id)
                     all_structure_ids[section_id] = spm_list
@@ -532,7 +586,9 @@ class ImageKdfWriter:
                     layout_view=layout_view,
                     has_page_spreads=bool(spread_pair_starts),
                 )
-                logger.debug("[kdf] 写入 document_data / metadata（阅读顺序与 sections）")
+                logger.debug(
+                    "[kdf] 写入 document_data / metadata（阅读顺序与 sections）"
+                )
                 self._create_document_data(
                     section_ids,
                     cover_res_id=first_cover_res,
@@ -613,9 +669,7 @@ class ImageKdfWriter:
 
     def _insert_fragment_properties(self, data: list[tuple[str, str, str]]) -> None:
         assert self.conn is not None
-        self.conn.executemany(
-            "INSERT INTO fragment_properties VALUES(?, ?, ?)", data
-        )
+        self.conn.executemany("INSERT INTO fragment_properties VALUES(?, ?, ?)", data)
 
     def _insert_blob_fragment(
         self, fragment_id: str, ion: str | IonPyDict, annotation: str = ""
@@ -705,9 +759,7 @@ class ImageKdfWriter:
             },
         ]
         if has_page_spreads:
-            capability_metadata.append(
-                {"key": "yj_double_page_spread", "value": 1}
-            )
+            capability_metadata.append({"key": "yj_double_page_spread", "value": 1})
 
         ion = IonPyDict.from_value(
             IonType.STRUCT,
@@ -737,9 +789,7 @@ class ImageKdfWriter:
             ("book_metadata",),
         )
         self._insert_blob_fragment("book_metadata", ion)
-        self._insert_fragment_property(
-            "book_metadata", "element_type", "book_metadata"
-        )
+        self._insert_fragment_property("book_metadata", "element_type", "book_metadata")
         self._insert_content_features(
             layout_view=layout_view, has_page_spreads=has_page_spreads
         )
@@ -750,11 +800,15 @@ class ImageKdfWriter:
         layout_view: Literal["fixed", "virtual"] = "fixed",
         has_page_spreads: bool = False,
     ) -> None:
-        spread_feature = """{
+        spread_feature = (
+            """{
  namespace: "com.amazon.yjconversion",
  key: "yj_double_page_spread",
  version_info: {version: {major_version: 1, minor_version: 0}}
- },""" if has_page_spreads else ""
+ },"""
+            if has_page_spreads
+            else ""
+        )
         if layout_view == "virtual":
             ion_text = """{
  kfx_id: content_features,
@@ -771,7 +825,9 @@ __SPREAD_FEATURE__
  version_info: {version: {major_version: 1, minor_version: 0}}
  }
  ]
-}""".replace("__SPREAD_FEATURE__", spread_feature)
+}""".replace(
+                "__SPREAD_FEATURE__", spread_feature
+            )
         else:
             ion_text = """{
  kfx_id: content_features,
@@ -788,7 +844,9 @@ __SPREAD_FEATURE__
  version_info: {version: {major_version: 1, minor_version: 0}}
  }
  ]
-}""".replace("__SPREAD_FEATURE__", spread_feature)
+}""".replace(
+                "__SPREAD_FEATURE__", spread_feature
+            )
         self._insert_blob_fragment("content_features", ion_text, "content_features")
         self._insert_fragment_property(
             "content_features", "element_type", "content_features"
@@ -824,10 +882,13 @@ __SPREAD_FEATURE__
         erase_colorsoft_rainbow: bool,
         preloaded_rasters: list[tuple[bytes, str, int, int] | None] | None,
         rainbow_use_gpu: bool,
+        max_width: int | None,
     ) -> tuple[str, list[tuple[str, int]], list[str], list[str]]:
         """Write two page images as one KDF ``page_spread`` reading section."""
         if len(image_paths) != 2:
-            raise ValueError("Una sección page_spread requiere exactamente dos páginas.")
+            raise ValueError(
+                "Una sección page_spread requiere exactamente dos páginas."
+            )
         assert self.res_dir is not None
         axis_ion = "vertical" if virtual_panel_axis == "vertical" else "horizontal"
 
@@ -841,9 +902,7 @@ __SPREAD_FEATURE__
 
         for page_index, image_path in enumerate(image_paths):
             preloaded = (
-                preloaded_rasters[page_index]
-                if preloaded_rasters is not None
-                else None
+                preloaded_rasters[page_index] if preloaded_rasters is not None else None
             )
             if preloaded is None:
                 image_bytes, ion_fmt, width, height = _load_page_raster_for_kdf(
@@ -851,6 +910,7 @@ __SPREAD_FEATURE__
                     rotate_landscape_90=rotate_landscape_90,
                     erase_colorsoft_rainbow=erase_colorsoft_rainbow,
                     rainbow_use_gpu=rainbow_use_gpu,
+                    max_width=max_width,
                 )
             else:
                 image_bytes, ion_fmt, width, height = preloaded
@@ -863,9 +923,7 @@ __SPREAD_FEATURE__
             aux_id = self.create_fragment_id("d")
             thumbnail_id = self._add_thumbnail_resource(image_bytes)
             thumbnail_field = (
-                f',\n thumbnails: kfx_id::"{thumbnail_id}"'
-                if thumbnail_id
-                else ""
+                f',\n thumbnails: kfx_id::"{thumbnail_id}"' if thumbnail_id else ""
             )
 
             (self.res_dir / location_id).write_bytes(image_bytes)
@@ -968,9 +1026,7 @@ __SPREAD_FEATURE__
                 ]
             )
 
-        panels = ",\n ".join(
-            f'kfx_id::"{outer_id}"' for outer_id, *_ in page_nodes
-        )
+        panels = ",\n ".join(f'kfx_id::"{outer_id}"' for outer_id, *_ in page_nodes)
         section_text = f"""{{
  section_name: kfx_id::"{section_id}",
  page_templates: [
@@ -995,17 +1051,13 @@ __SPREAD_FEATURE__
             (story_id, "element_type", "storyline"),
             (story_id, "child", story_id),
         ]
-        storyline_properties.extend(
-            (story_id, "child", node[0]) for node in page_nodes
-        )
+        storyline_properties.extend((story_id, "child", node[0]) for node in page_nodes)
         self._insert_fragment_properties(storyline_properties)
 
         spm_text = (
             f'{{section_name: kfx_id::"{section_id}", contains: '
             f'[[{spm_list[0][1] + 1}, kfx_id::"{template_id}"], '
-            + ", ".join(
-                f'[{pid + 1}, kfx_id::"{fid}"]' for fid, pid in spm_list[1:]
-            )
+            + ", ".join(f'[{pid + 1}, kfx_id::"{fid}"]' for fid, pid in spm_list[1:])
             + "]}"
         )
         spm_id = f"{section_id}-spm"
@@ -1026,6 +1078,7 @@ __SPREAD_FEATURE__
         virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
         preloaded_raster: tuple[bytes, str, int, int] | None = None,
         rainbow_use_gpu: bool = False,
+        max_width: int | None = None,
     ) -> tuple[str, list[tuple[str, int]], str, str]:
         """虚拟视图（对齐 Kindle Create）：页模板 ``virtual_panel: enabled``、SPM 三槽、中层 ``layout: vertical|horizontal``。"""
         assert self.res_dir is not None
@@ -1037,11 +1090,10 @@ __SPREAD_FEATURE__
                 rotate_landscape_90=rotate_landscape_90,
                 erase_colorsoft_rainbow=erase_colorsoft_rainbow,
                 rainbow_use_gpu=rainbow_use_gpu,
+                max_width=max_width,
             )
 
-        axis_ion = (
-            "vertical" if virtual_panel_axis == "vertical" else "horizontal"
-        )
+        axis_ion = "vertical" if virtual_panel_axis == "vertical" else "horizontal"
         section_id = self.create_fragment_id("c")
         section_struct_id = self.create_fragment_id("i")
         middle_id = self.create_fragment_id("i")
@@ -1204,6 +1256,7 @@ __SPREAD_FEATURE__
         erase_colorsoft_rainbow: bool = False,
         preloaded_raster: tuple[bytes, str, int, int] | None = None,
         rainbow_use_gpu: bool = False,
+        max_width: int | None = None,
     ) -> tuple[str, list[tuple[str, int]], str]:
         assert self.res_dir is not None
         if preloaded_raster is not None:
@@ -1214,6 +1267,7 @@ __SPREAD_FEATURE__
                 rotate_landscape_90=rotate_landscape_90,
                 erase_colorsoft_rainbow=erase_colorsoft_rainbow,
                 rainbow_use_gpu=rainbow_use_gpu,
+                max_width=max_width,
             )
 
         section_id = self.create_fragment_id("c")
@@ -1367,9 +1421,7 @@ __SPREAD_FEATURE__
  ]
 }}"""
         self._insert_blob_fragment("document_data", document_data_ion, "document_data")
-        self._insert_fragment_property(
-            "document_data", "element_type", "document_data"
-        )
+        self._insert_fragment_property("document_data", "element_type", "document_data")
         # 顶层 $258：与 document_data 同阅读顺序，并供 get_metadata_value 回退。
         reading_orders_block = f"""reading_orders: [
  {{
@@ -1380,9 +1432,13 @@ __SPREAD_FEATURE__
         meta_parts: list[str] = [reading_orders_block]
         m = self.epub_metadata
         if (m.title or "").strip():
-            meta_parts.append(f"title: {json.dumps(m.title.strip(), ensure_ascii=False)}")
+            meta_parts.append(
+                f"title: {json.dumps(m.title.strip(), ensure_ascii=False)}"
+            )
         if (m.author or "").strip():
-            meta_parts.append(f"author: {json.dumps(m.author.strip(), ensure_ascii=False)}")
+            meta_parts.append(
+                f"author: {json.dumps(m.author.strip(), ensure_ascii=False)}"
+            )
         if (m.publisher or "").strip():
             meta_parts.append(
                 f"publisher: {json.dumps(m.publisher.strip(), ensure_ascii=False)}"

@@ -201,6 +201,7 @@ def _images_to_kpf_zip(
     layout_view: Literal["fixed", "virtual"] = "fixed",
     virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
     page_spread_previews: bool = False,
+    max_width: int | None = None,
 ) -> None:
     """在已存在的 ``tmp_path`` 工作目录内生成 KPF 目录树并打包为 ``dest``（.kpf ZIP）。
 
@@ -267,6 +268,7 @@ def _images_to_kpf_zip(
         virtual_panel_axis=virtual_panel_axis,
         spread_pair_starts=spread_pair_starts,
         cover_index=cover_index if page_spread_previews else None,
+        max_width=max_width,
     )
     _write_kcb(
         kpf_dir,
@@ -301,6 +303,7 @@ def epub_to_kpf(
     layout_view: Literal["fixed", "virtual"] = "fixed",
     virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
     page_spread_previews: bool = False,
+    max_width: int | None = None,
     book_title: str | None = None,
     book_author: str | None = None,
     book_publisher: str | None = None,
@@ -363,6 +366,7 @@ def epub_to_kpf(
             layout_view=layout_view,
             virtual_panel_axis=virtual_panel_axis,
             page_spread_previews=page_spread_previews,
+            max_width=max_width,
         )
 
     logger.debug("环节: 临时目录已清理，流程结束")
@@ -383,6 +387,7 @@ def comic_archive_to_kpf(
     layout_view: Literal["fixed", "virtual"] = "fixed",
     virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
     page_spread_previews: bool = False,
+    max_width: int | None = None,
     book_title: str | None = None,
     book_author: str | None = None,
     book_publisher: str | None = None,
@@ -444,6 +449,7 @@ def comic_archive_to_kpf(
             layout_view=layout_view,
             virtual_panel_axis=virtual_panel_axis,
             page_spread_previews=page_spread_previews,
+            max_width=max_width,
         )
 
     logger.debug("环节: 漫画包临时目录已清理")
@@ -464,6 +470,7 @@ def convert_to_kfx(
     layout_view: Literal["fixed", "virtual"] = "fixed",
     virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
     page_spread_previews: bool = False,
+    max_width: int | None = None,
     cde_content_type: Literal["PDOC", "EBOOK"] = "PDOC",
     keep_kpf: bool = False,
     book_title: str | None = None,
@@ -503,6 +510,7 @@ def convert_to_kfx(
                 layout_view=layout_view,
                 virtual_panel_axis=virtual_panel_axis,
                 page_spread_previews=page_spread_previews,
+                max_width=max_width,
                 book_title=book_title,
                 book_author=book_author,
                 book_publisher=book_publisher,
@@ -521,6 +529,7 @@ def convert_to_kfx(
                 layout_view=layout_view,
                 virtual_panel_axis=virtual_panel_axis,
                 page_spread_previews=page_spread_previews,
+                max_width=max_width,
                 book_title=book_title,
                 book_author=book_author,
                 book_publisher=book_publisher,
@@ -568,6 +577,7 @@ def convert_epub_to_kfx(
     layout_view: Literal["fixed", "virtual"] = "fixed",
     virtual_panel_axis: Literal["vertical", "horizontal"] = "vertical",
     page_spread_previews: bool = False,
+    max_width: int | None = None,
     cde_content_type: Literal["PDOC", "EBOOK"] = "PDOC",
     keep_kpf: bool = False,
     book_title: str | None = None,
@@ -588,6 +598,7 @@ def convert_epub_to_kfx(
         layout_view=layout_view,
         virtual_panel_axis=virtual_panel_axis,
         page_spread_previews=page_spread_previews,
+        max_width=max_width,
         cde_content_type=cde_content_type,
         keep_kpf=keep_kpf,
         book_title=book_title,
