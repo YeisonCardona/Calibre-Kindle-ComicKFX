@@ -1,4 +1,4 @@
-# ComicKFX
+# Calibre Kindle - ComicKFX
 
 A Calibre plugin for generating Kindle-optimized KFX files from CBZ comics.
 
